@@ -1,6 +1,16 @@
 ---
 name: wiki
-description: "LLM Wiki maintainer for ~/vaults (Karpathy 3-layer pattern: raw / wiki / schema). Use when the user asks to initialize the vault, ingest a project's graphify output, ingest a URL or file, query the wiki, lint, or rewrite the overview. Vault is consumer-only — never runs graphify itself."
+description: |
+  Use this skill when the user wants to ingest, compile, query, or maintain their personal LLM-curated knowledge vault at `~/vaults/` (Karpathy "LLM Wiki" pattern: immutable `raw/` sources → curated `wiki/` pages with frontmatter, `overview.md`, and `index.md`).
+
+  Trigger on intents like:
+  - Save into vault: dropping a URL, gist, paper, file, meeting note, or recent chat answer for long-term keeping ("vault에 넣어줘", "wiki에 컴파일/정리")
+  - Search / recall: finding what the vault has on a topic, navigating concept pages ("wiki에 ___ 있어?", "vault에서 찾아")
+  - Maintain: rewriting `overview.md`, linting orphans/stale/frontmatter, refreshing `index.md`
+  - Initialize: bootstrapping a new vault
+  - Any mention of `~/vaults`, `raw/`, `wiki/sources/`, PKM, zettelkasten, or second-brain tied to a knowledge action
+
+  Does NOT trigger for project READMEs, codebase explanation, or running `graphify` itself (the vault is consumer-only).
 trigger: /wiki
 ---
 
@@ -298,10 +308,35 @@ Pipeline: project graphify → vault raw/repos snapshot → curated wiki summary
 2. **Pre-flight check:** If `$PROJECT/graphify-out/graph.json` is missing, stop with:
    > graphify hasn't been run in $PROJECT yet. Run `/graphify .` in the project first, then re-invoke /wiki ingest-project.
 
-3. **Refresh graphify output in the project** (incremental — fast if no source changes):
+3. **Refresh graphify output in the project** (incremental — fast if no source changes).
+
+   `graphify`는 community 라벨링을 단일 명령으로 처리하지 않는다 (그쪽 SKILL의 Step 5는 외부 LLM이 채워야 하는 수동 단계). 만약 `.graphify_labels.json`이 없거나 community 수와 어긋난 상태에서 `--wiki`를 같이 돌리면 `graphify/wiki.py`가 `Community {cid}` placeholder를 파일명으로 굳혀버리고 (`_safe_filename(label)` → `Community_0.md` 등), 매 export마다 기존 `wiki/*.md`를 모두 삭제 후 재생성하므로 이전의 사람-라벨까지 함께 날아간다.
+
+   그래서 3단계로 분리해 실행한다:
+
+   **3a. graph만 먼저 갱신 (wiki export 제외):**
    ```bash
-   (cd "$PROJECT" && graphify . --update --wiki --no-viz)
+   (cd "$PROJECT" && graphify . --update --no-viz)
    ```
+
+   **3b. community 라벨 검증 및 보강:**
+   ```bash
+   ANALYSIS="$PROJECT/graphify-out/.graphify_analysis.json"
+   LABELS="$PROJECT/graphify-out/.graphify_labels.json"
+   [ -f "$ANALYSIS" ] || { echo "analysis missing — graphify did not produce communities. abort."; exit 1; }
+   ```
+
+   - `$ANALYSIS`의 `communities` 키 목록과 `$LABELS`(있다면)의 키 목록을 비교한다.
+   - `$LABELS`가 없거나, community 키와 라벨 키 집합이 다르거나, 어떤 라벨이 `^Community \d+$` 패턴이면 → **누락된 cid 각각에 대해** `$ANALYSIS.communities[cid]` 안의 node label들을 읽고 2~5단어의 사람이 읽을 수 있는 이름을 만들어 라벨 dict에 채운다.
+   - 채운 결과로 `$LABELS`를 덮어쓴다 (JSON, key는 문자열, `ensure_ascii=False` 상응).
+   - 라벨이 이미 완전하고 placeholder가 없으면 이 단계는 no-op.
+
+   **3c. 검증된 라벨로 wiki를 export:**
+   ```bash
+   (cd "$PROJECT" && graphify export wiki)
+   ```
+
+   이 시점에 `$PROJECT/graphify-out/wiki/` 의 파일명은 모두 사람-라벨 기반이다. `Community_N.md` / `Cluster_N.md` 파일이 하나라도 보이면 3b가 실패한 것이므로 중단하고 사용자에게 보고한다.
 
 4. **Snapshot to vault raw layer:**
    ```bash
