@@ -40,11 +40,32 @@ Reference: https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f
 /wiki overview                              # rewrite wiki/overview.md from current pages
 ```
 
+## Bundled resources
+
+Read these only when the relevant subcommand fires — they're heavy and shouldn't bloat every invocation:
+
+- `assets/vault-claude-template.md` — the schema file that `/wiki init` writes into a new vault. Treated as the **canonical source of vault conventions**; reusable as a reference when answering questions about vault structure.
+- `scripts/rebuild_wiki.py` — invoked from `/wiki ingest-project` Step 5. Rebuilds `graphify-out/wiki/` from `graph.json` + `.graphify_labels.json` without an LLM API key, by calling `graphify.wiki.to_wiki()` directly.
+- `scripts/recover_labels.py` — invoked when an external `graphify .` run has overwritten curated labels. Reads the previous labels from `raw/repos/<name>/` filenames and re-maps them to the new community ids via top-node voting.
+
 ## Vault resolution
 
 - Default root: `~/vaults`. Override with `WIKI_VAULT` env var or `init [path]`.
 - For every non-`init` command: verify `$VAULT/CLAUDE.md` exists. If not, tell the user to run `/wiki init` first and stop.
-- Conventions live in `$VAULT/CLAUDE.md`. Read it before any non-trivial operation — it is the source of truth for page types, frontmatter, and absolute rules.
+- Conventions live in `$VAULT/CLAUDE.md`. Read it before any non-trivial operation — it is the source of truth for page types, frontmatter, and absolute rules. The `assets/vault-claude-template.md` is the template version; the live vault may have extensions (ADR conventions, jj workflow notes, etc.) that take precedence.
+
+## Schema evolution
+
+The vault `CLAUDE.md` is a **living document**, not immutable. `/wiki init` writes it once from the template, but as the vault accumulates operational experience, the schema evolves — new page types, new frontmatter fields, new policies. This is expected; trying to keep the live `CLAUDE.md` identical to the template defeats the purpose of a personal vault.
+
+The vault's own conventions (see `$VAULT/CLAUDE.md`) decide *how* to evolve, but the high-level shape is:
+
+- **Small policy additions** (one or two lines — e.g., new ignore pattern, new field convention) → edit the relevant section in `$VAULT/CLAUDE.md` directly. No ADR needed; the line itself is the decision.
+- **Operating invariants** (rules that lint/ingest/retrieval depend on, or that future operators must not violate without thinking) → write an ADR under `$VAULT/wiki/decisions/`, then add a one-line entry in the corresponding `$VAULT/CLAUDE.md` section that links to the ADR. The ADR body holds the reasoning and is immutable; the `CLAUDE.md` line is the operational summary.
+
+The asymmetry matters: ADR bodies are append-only history (so future operators can see *why* a rule exists), while `CLAUDE.md` is the always-fresh operating manual (so they can see *what* the rule is at a glance). Linking the two keeps both honest.
+
+This skill does not enforce the ADR-vs-direct-edit choice — that's a judgment call the vault operator makes. But when an ingest or query produces synthesis that should become a vault-wide rule, prompt the user to consider which form fits, rather than silently editing `CLAUDE.md`.
 
 ## What you must do when invoked
 
@@ -55,22 +76,24 @@ Otherwise, bind:
 ```bash
 VAULT="${WIKI_VAULT:-$HOME/vaults}"
 TODAY=$(date +%Y-%m-%d)
+SKILL_DIR="$HOME/.claude/skills/wiki"   # location of this skill's scripts/ and assets/
 ```
+
+`$SKILL_DIR` matches the "Base directory for this skill" reported when the skill is invoked. The Python scripts under `$SKILL_DIR/scripts/` invoke `python3` and expect `graphify` to be importable. Concretely this means: whichever `python3` resolves on the user's PATH must be the one with `graphify` installed. Runtime managers like mise or pyenv handle this automatically via shims; on a system Python or virtualenv setup, ensure `pip install graphify` has been run for that interpreter (or activate the matching venv before invoking the skill).
 
 Then dispatch on the subcommand below.
 
 ## Common helpers
 
-**Append a log entry** (always at the end of the operation, never mid-flight):
+**Append a log entry** at the end of each operation (never mid-flight, so a partial failure doesn't leave a misleading entry):
 
 ```bash
 printf '\n## [%s] %s | %s\n' "$TODAY" "$OP" "$MSG" >> "$VAULT/wiki/log.md"
 ```
 
-`$OP` is one of `init | sync | ingest | query | lint | synthesis`.
-**Never edit existing log lines. Append only.**
+`$OP` is one of `init | sync | ingest | query | lint | synthesis`. Past entries are never edited — log is append-only audit trail.
 
-**Read vault schema before non-init operations:** read `$VAULT/CLAUDE.md`. Defer to its rules over anything embedded in this skill.
+**Read vault schema before non-init operations:** read `$VAULT/CLAUDE.md`. Its rules override anything embedded in this skill, because the vault may have evolved its own conventions on top of the template.
 
 ---
 
@@ -78,7 +101,7 @@ printf '\n## [%s] %s | %s\n' "$TODAY" "$OP" "$MSG" >> "$VAULT/wiki/log.md"
 
 Bootstrap a fresh LLM Wiki vault. Default path is `~/vaults`; if `[path]` is given, use it.
 
-1. Verify state:
+1. **Verify state** — refuse to overwrite an existing vault:
    ```bash
    TARGET="${1:-$HOME/vaults}"
    if [ -f "$TARGET/CLAUDE.md" ]; then
@@ -89,106 +112,15 @@ Bootstrap a fresh LLM Wiki vault. Default path is `~/vaults`; if `[path]` is giv
    mkdir -p "$TARGET"
    ```
 
-2. Create directory structure:
+2. **Create directory structure:**
    ```bash
    mkdir -p "$TARGET"/raw/{articles,papers,repos,data,images,assets}
    mkdir -p "$TARGET"/wiki/{concepts,entities,sources,comparisons}
    ```
 
-3. Write `$TARGET/CLAUDE.md` with the schema below (use the Write tool, do NOT cat-heredoc — the content has many backticks):
+3. **Write `$TARGET/CLAUDE.md`** by copying `assets/vault-claude-template.md` from this skill verbatim. Use the Write tool to avoid heredoc backtick escaping. The template is the canonical schema; do not paraphrase it inline here.
 
-   ```markdown
-   # LLM Wiki Schema (Karpathy Pattern)
-
-   이 vault는 Andrej Karpathy의 LLM Wiki 패턴을 따른다.
-   참조: https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f
-
-   ## 3-Layer 아키텍처
-
-   1. **Raw Sources (`raw/`)** — immutable. 외부에서 가져온 원본 자료. 절대 수정하지 말 것
-   2. **Wiki (`wiki/`)** — LLM이 소유. raw/를 컴파일한 결과물
-   3. **Schema (`CLAUDE.md`)** — 이 파일. 에이전트를 wiki maintainer로 변환하는 규칙
-
-   ## 디렉토리 레이아웃
-
-   - `raw/articles/` — 블로그·뉴스·클리핑 (`YYYY-MM-DD-slug.md`)
-   - `raw/papers/` — 논문 PDF
-   - `raw/repos/` — 외부 레포 README, graphify export 산출물
-   - `raw/data/` — 벤치마크, CSV, JSON
-   - `raw/images/` — 다이어그램, 스크린샷
-   - `raw/assets/` — Obsidian 첨부파일 기본 경로
-   - `wiki/index.md` — 전체 카탈로그 (카테고리별)
-   - `wiki/log.md` — append-only 활동 로그
-   - `wiki/overview.md` — 지식 베이스 전체 합성 요약
-   - `wiki/concepts/` — 개념·이론·패턴
-   - `wiki/entities/` — 인물·조직·제품
-   - `wiki/sources/` — raw/ 항목별 요약 (1:1 매핑)
-   - `wiki/comparisons/` — 비교·대조 페이지
-
-   ## 페이지 프론트매터
-
-   모든 wiki 페이지는 YAML frontmatter 필수:
-
-   - `title` — Human-readable 제목
-   - `type` — `concept | entity | source-summary | comparison`
-   - `sources` — 참조한 raw/ 파일 경로 배열
-   - `related` — 링크된 다른 wiki 페이지
-   - `created` — `YYYY-MM-DD`
-   - `updated` — `YYYY-MM-DD`
-   - `confidence` — `high | medium | low`
-
-   ## 페이지 유형별 규칙
-
-   - **concept (`wiki/concepts/`)** — 개념·알고리즘·패턴. "무엇이고 왜 중요한가" 중심
-   - **entity (`wiki/entities/`)** — 인물·조직·제품·모델. 핵심 사실 + 관련 작업 + 관계
-   - **source-summary (`wiki/sources/`)** — raw/ 단일 항목의 압축 요약 (1:1 매핑)
-   - **comparison (`wiki/comparisons/`)** — N개 항목을 같은 축에서 비교. 표 권장
-
-   ## 특수 파일
-
-   - `wiki/index.md` — 카테고리별 카탈로그. 신규·삭제 시 반드시 갱신
-   - `wiki/log.md` — append-only. 절대 과거 항목 수정 금지. 포맷: `## [YYYY-MM-DD] <operation> | <description>` (operation: `init | sync | ingest | query | lint | synthesis`)
-   - `wiki/overview.md` — 전체 high-level 합성. 주기적으로 다시 쓰기
-
-   ## 워크플로
-
-   주요 워크플로는 `/wiki` skill을 통해 실행:
-
-   - `/wiki ingest-project <path>` — graphify 산출물을 raw/repos/ 로 가져와 wiki/sources/ 로 요약
-   - `/wiki ingest-url <url>` — URL을 raw/articles/ 로 저장하고 요약
-   - `/wiki ingest-file <path>` — 로컬 파일을 raw/ 적절한 위치에 저장하고 요약
-   - `/wiki query "<question>"` — wiki를 통해 답변. 새 합성은 페이지로 저장
-   - `/wiki lint` — 고아·frontmatter·sources 경로·stale 점검
-   - `/wiki overview` — overview.md 재합성
-
-   ## graphify 연동
-
-   이 vault는 **consumer-only**다. graphify는 vault 안에서 절대 실행하지 않는다.
-
-   - graphify는 각 프로젝트에서 실행 (`/graphify .`)
-   - `/wiki ingest-project <프로젝트경로>` 가:
-     1. 프로젝트에서 `graphify . --update --wiki --no-viz` 실행
-     2. `graphify-out/wiki/` → `raw/repos/<name>/` 로 rsync (snapshot)
-     3. Claude가 raw/repos/<name>/ 을 읽어 `wiki/sources/summary-<name>.md` 작성
-     4. 새 개념·인물은 wiki/concepts/, wiki/entities/ 에 페이지 생성
-     5. wiki/index.md, wiki/log.md 갱신
-
-   ## Obsidian 설정
-
-   - Attachment folder path → `raw/assets/`
-   - Default view mode: preview
-   - `alwaysUpdateLinks: true`
-
-   ## 절대 규칙
-
-   - `raw/` 파일은 절대 수정하지 말 것
-   - `wiki/log.md` 는 append-only. 과거 항목 절대 편집 금지
-   - frontmatter 없는 wiki 페이지 생성 금지
-   - `wiki/index.md` 를 갱신하지 않고 새 wiki 페이지 생성 금지
-   - **vault 안에서 graphify 직접 실행 금지** (consumer-only)
-   ```
-
-4. Write the three special files (use the Write tool):
+4. **Write the three special files** with today's date filled in:
 
    `$TARGET/wiki/index.md`:
    ```markdown
@@ -204,24 +136,19 @@ Bootstrap a fresh LLM Wiki vault. Default path is `~/vaults`; if `[path]` is giv
    전체 wiki 페이지 카탈로그. 새 페이지를 만들 때 반드시 이 파일에 등록한다.
 
    ## Special
-
    - [overview](overview.md) — 지식 베이스 전체 high-level 합성
    - [log](log.md) — append-only 활동 로그
 
    ## Concepts
-
    _아직 항목 없음._
 
    ## Entities
-
    _아직 항목 없음._
 
    ## Sources
-
    _아직 항목 없음._
 
    ## Comparisons
-
    _아직 항목 없음._
    ```
 
@@ -260,26 +187,22 @@ Bootstrap a fresh LLM Wiki vault. Default path is `~/vaults`; if `[path]` is giv
    충분한 페이지가 쌓이면 다시 작성한다.
 
    ## 주요 테마
-
    _아직 ingest된 자료가 없음._
 
    ## 미해결 질문
-
    _TBD._
 
    ## 큰 그림
-
    _TBD._
    ```
 
-5. Suggest Obsidian config (don't write — just tell user):
-
+5. **Suggest Obsidian config** (tell, don't write):
    ```
    Obsidian을 사용한다면 .obsidian/app.json 에 다음을 추가:
      "attachmentFolderPath": "raw/assets"
    ```
 
-6. Report:
+6. **Report:**
    ```
    LLM Wiki initialized at <TARGET>.
    Schema: <TARGET>/CLAUDE.md
@@ -305,52 +228,56 @@ Pipeline: project graphify → vault raw/repos snapshot → curated wiki summary
    DEST="$VAULT/raw/repos/$NAME"
    ```
 
-2. **Pre-flight check:** If `$PROJECT/graphify-out/graph.json` is missing, stop with:
-   > graphify hasn't been run in $PROJECT yet. Run `/graphify .` in the project first, then re-invoke /wiki ingest-project.
+2. **Pre-flight check:** if `$PROJECT/graphify-out/graph.json` is missing, tell the user to run `/graphify .` in the project first, then stop.
 
-3. **Refresh graphify output in the project** (incremental — fast if no source changes).
-
-   `graphify`는 community 라벨링을 단일 명령으로 처리하지 않는다 (그쪽 SKILL의 Step 5는 외부 LLM이 채워야 하는 수동 단계). 만약 `.graphify_labels.json`이 없거나 community 수와 어긋난 상태에서 `--wiki`를 같이 돌리면 `graphify/wiki.py`가 `Community {cid}` placeholder를 파일명으로 굳혀버리고 (`_safe_filename(label)` → `Community_0.md` 등), 매 export마다 기존 `wiki/*.md`를 모두 삭제 후 재생성하므로 이전의 사람-라벨까지 함께 날아간다.
-
-   그래서 3단계로 분리해 실행한다:
-
-   **3a. graph만 먼저 갱신 (wiki export 제외):**
+3. **Refresh graph (no LLM):**
    ```bash
-   (cd "$PROJECT" && graphify . --update --no-viz)
+   (cd "$PROJECT" && graphify update . )
    ```
 
-   **3b. community 라벨 검증 및 보강:**
+   `graphify update` does AST-based re-extraction + clustering without calling any LLM. It rewrites `graph.json`, `.graphify_labels.json` (with placeholder labels for new communities), and `manifest.json`.
+
+   **Why not `graphify . --wiki`?** The full pipeline requires an LLM API key, produces non-deterministic labels (each run can name the same conceptual community differently — your previous curation is lost), and tends to leave small communities (~5% of total) as placeholders. Splitting the steps lets Claude take over label curation and guarantees 100% coverage.
+
+4. **Curate labels to 100% coverage.**
+
+   Load `.graphify_labels.json`, identify entries matching `^Community \d+$` (graphify's placeholder pattern), and assign meaningful labels per the policy in `$VAULT/CLAUDE.md` — typically:
+
+   - **size ≥ 3 community** — read the community's top nodes from `graph.json` (filter by `node.community == cid`, sort by graph degree), then write a short **English** label that captures the domain. English keeps token usage low and search vocabulary consistent with the code identifiers in the graph. Use Korean only when the term is a Korean-native domain noun (e.g., `테토디`, `행정구역`, `Coway Dept API`).
+   - **size 1-2 community** — these are nearly-singleton groups; curating them adds little signal. Use the top node's `label` field as the community label directly (deterministic, no token cost). Truncate to 60 chars if needed.
+
+   The goal is zero placeholder filenames in the final wiki. Anything labeled `Community_N.md` is a curation gap that hurts retrieval — users browsing `raw/repos/<name>/` see noise instead of domain structure.
+
+   Write the curated labels back to `.graphify_labels.json` (`ensure_ascii=False`).
+
+   **If labels were recently overwritten** (graph mtime newer than your last ingest, `.graphify_labels.json.bak*` exists, English labels appeared where you had Korean), an external `graphify .` ran in the meantime. Recover from the previous filenames before curating:
+
    ```bash
-   ANALYSIS="$PROJECT/graphify-out/.graphify_analysis.json"
-   LABELS="$PROJECT/graphify-out/.graphify_labels.json"
-   [ -f "$ANALYSIS" ] || { echo "analysis missing — graphify did not produce communities. abort."; exit 1; }
+   python "$SKILL_DIR/scripts/recover_labels.py" "$PROJECT" "$DEST"
    ```
 
-   - `$ANALYSIS`의 `communities` 키 목록과 `$LABELS`(있다면)의 키 목록을 비교한다.
-   - `$LABELS`가 없거나, community 키와 라벨 키 집합이 다르거나, 어떤 라벨이 `^Community \d+$` 패턴이면 → **누락된 cid 각각에 대해** `$ANALYSIS.communities[cid]` 안의 node label들을 읽고 2~5단어의 사람이 읽을 수 있는 이름을 만들어 라벨 dict에 채운다.
-   - 채운 결과로 `$LABELS`를 덮어쓴다 (JSON, key는 문자열, `ensure_ascii=False` 상응).
-   - 라벨이 이미 완전하고 placeholder가 없으면 이 단계는 no-op.
+   This reads `$DEST/<safe_filename>.md` files (their stems are the previous labels), extracts "Key Concepts" top nodes, and re-maps via voting in the new graph. Labels whose communities were merged or split surface on stderr — record those in the summary's "Open questions" so the user can decide whether to recreate them.
 
-   **3c. 검증된 라벨로 wiki를 export:**
+5. **Rebuild wiki articles (no LLM):**
    ```bash
-   (cd "$PROJECT" && graphify export wiki)
+   python "$SKILL_DIR/scripts/rebuild_wiki.py" "$PROJECT"
    ```
 
-   이 시점에 `$PROJECT/graphify-out/wiki/` 의 파일명은 모두 사람-라벨 기반이다. `Community_N.md` / `Cluster_N.md` 파일이 하나라도 보이면 3b가 실패한 것이므로 중단하고 사용자에게 보고한다.
+   This calls `graphify.wiki.to_wiki()` directly with the curated labels, writing `$PROJECT/graphify-out/wiki/`. Exit code 1 means placeholder files remain — abort and report which communities were missed.
 
-4. **Snapshot to vault raw layer:**
+6. **Snapshot to vault raw layer:**
    ```bash
    mkdir -p "$DEST"
    rsync -a --delete "$PROJECT/graphify-out/wiki/" "$DEST/"
    COMMIT=$(cd "$PROJECT" && git rev-parse --short HEAD 2>/dev/null || echo n/a)
    FILES=$(find "$DEST" -type f -name '*.md' | wc -l | tr -d ' ')
    OP=sync MSG="raw/repos/$NAME ($COMMIT, $FILES files)"
-   printf '\n## [%s] %s | %s\n' "$TODAY" "$OP" "$MSG" >> "$VAULT/wiki/log.md"
+   # log this sync step
    ```
 
-5. **Synthesize `wiki/sources/summary-$NAME.md`:**
+7. **Synthesize `$VAULT/wiki/sources/summary-$NAME.md`:**
 
-   Read `$DEST/index.md` (graphify-generated wiki index) and the top community pages by node count. Then write `$VAULT/wiki/sources/summary-$NAME.md` with frontmatter:
+   Read `$DEST/index.md` (graphify-generated wiki index) and the top community pages by node count. Write with frontmatter:
 
    ```yaml
    ---
@@ -367,37 +294,25 @@ Pipeline: project graphify → vault raw/repos snapshot → curated wiki summary
 
    Body sections (in order):
    - **TL;DR** — 1-2 sentences. What is this project?
-   - **주요 모듈** — list of god nodes / large communities with one-line purpose each
+   - **주요 모듈** — list of god nodes / large communities with a one-line purpose each
    - **진입점** — entry-point files or APIs (if identifiable from the graph)
    - **외부 의존성** — key external libs/services
    - **인용 가능한 발췌** — short snippets that capture key claims
-   - **Open questions** — ambiguities or gaps
+   - **Open questions** — ambiguities or gaps (include any labels lost in step 4's recovery)
 
-6. **Create / update concept and entity pages — sparingly:**
+8. **Create/update concept and entity pages — sparingly.** Add `wiki/concepts/<kebab-case>.md` or `wiki/entities/<kebab-case>.md` only when a concept genuinely appears in multiple sources or is reusable. A page per god node hurts retrieval more than it helps — embedding it in the source summary is usually enough.
 
-   For named concepts that appear in multiple communities AND are reusable across other sources, create `$VAULT/wiki/concepts/<kebab-case>.md`. Add the new source to its `sources:`.
+9. **Update `wiki/index.md`** — add new pages under their categories. Preserve existing entries.
 
-   For named organizations, products, or people, create `$VAULT/wiki/entities/<kebab-case>.md`.
-
-   **Do NOT create a page for every god node.** Only create when the concept/entity is genuinely cross-cutting. Otherwise just mention in the summary. Page proliferation hurts retrieval.
-
-7. **Update `wiki/index.md`** — add new pages under their categories. Preserve existing entries.
-
-8. **Append to log:**
-   ```bash
-   OP=ingest MSG="$NAME → wiki/sources/summary-$NAME.md (+$NEW_C concepts, +$NEW_E entities)"
-   printf '\n## [%s] %s | %s\n' "$TODAY" "$OP" "$MSG" >> "$VAULT/wiki/log.md"
-   ```
-
-9. **Report:**
-   ```
-   Ingested $NAME.
-     raw/repos/$NAME/                ($FILES files synced, commit $COMMIT)
-     wiki/sources/summary-$NAME.md   (created/updated)
-     wiki/concepts/...               ($NEW_C new, $UPD_C updated)
-     wiki/entities/...               ($NEW_E new, $UPD_E updated)
-     wiki/index.md                   (updated)
-   ```
+10. **Append log entry** and **report**:
+    ```
+    Ingested $NAME.
+      raw/repos/$NAME/                ($FILES files synced, commit $COMMIT)
+      wiki/sources/summary-$NAME.md   (created/updated)
+      wiki/concepts/...               ($NEW_C new, $UPD_C updated)
+      wiki/entities/...               ($NEW_E new, $UPD_E updated)
+      wiki/index.md                   (updated)
+    ```
 
 ---
 
@@ -432,7 +347,7 @@ Pipeline: project graphify → vault raw/repos snapshot → curated wiki summary
 2. Pick 3-5 candidate pages by keyword relevance to the question.
 3. Read those pages; follow `related:` and `sources:` as needed.
 4. Compose answer **with citations to wiki page paths** (e.g. `wiki/concepts/foo.md`).
-5. If the wiki lacks enough material, say so explicitly — do not hallucinate.
+5. If the wiki lacks enough material, say so explicitly — hallucinating undermines the vault's value as a trustworthy reference.
 6. If your synthesis is genuinely new and reusable (not already in any page), save it:
    - Concept-level → new/updated `wiki/concepts/...md`
    - Cross-page comparison → new `wiki/comparisons/...md`
@@ -450,11 +365,11 @@ Run these checks across `$VAULT/wiki/**/*.md` (skip `index.md`, `log.md`, `overv
 3. **Broken sources** — for each page's `sources:` array, verify each path exists relative to `$VAULT`.
 4. **Stale** — `updated:` more than 90 days before `$TODAY`.
 
-Report findings as a checklist. Auto-fix only safe items:
+Report findings as a checklist. Auto-fix only safe items where the intent is unambiguous:
 - Missing `updated:` → add with current date
 - Missing `confidence:` on non-index pages → add `medium`
 
-For everything else, ask the user.
+Anything else (orphans, broken sources, stale content) is a judgment call — surface to the user.
 
 Append log: `OP=lint MSG="$ORPHANS orphan / $FM frontmatter / $SRC sources / $STALE stale"`
 
@@ -488,16 +403,17 @@ Rewrite `$VAULT/wiki/overview.md` from current wiki state.
 
 ## Absolute rules
 
-- Never edit files under `$VAULT/raw/` — that directory is immutable
-- Never edit past entries in `$VAULT/wiki/log.md` — append-only
-- Never create wiki pages without YAML frontmatter
-- Never create new wiki pages without registering in `$VAULT/wiki/index.md`
-- **Never run `graphify` inside the vault** — graphify always runs in the source project; the vault is consumer-only
-- When in doubt about a new concept page vs. embedding in a summary, prefer embedding — page proliferation hurts retrieval
-- For non-init commands, if `$VAULT/CLAUDE.md` is missing, tell the user to run `/wiki init` first and stop
+These are invariants that keep the vault's retrieval value intact. Violating any of them breaks downstream tools or destroys provenance.
+
+- **Don't edit files under `$VAULT/raw/`.** The whole point of the raw layer is immutability — once you start editing, the wiki's "this is what the source actually said" guarantee collapses.
+- **Don't edit past entries in `$VAULT/wiki/log.md`.** It's an audit trail; rewriting history makes it useless. Append only.
+- **Don't create wiki pages without YAML frontmatter.** lint and retrieval both depend on frontmatter; pages without it are invisible to those tools.
+- **Don't create new wiki pages without registering in `$VAULT/wiki/index.md`.** A page no one can find through the index is dead weight.
+- **Don't run `graphify` inside the vault.** The vault is consumer-only; running graphify here would rewrite raw/ snapshots and break the ingest contract.
+- **Don't leave placeholder labels after `/wiki ingest-project`.** `Community_NN.md` / `Cluster_NN.md` filenames are noise in retrieval and indicate the curation step was skipped.
+- **For non-init commands, if `$VAULT/CLAUDE.md` is missing, stop and ask the user to run `/wiki init` first.** Operating without the schema means making up conventions that won't match the rest of the vault.
 
 ## Honesty rules
 
-- If a source summary doesn't have enough material for a section, write `_TBD_` — don't fabricate
-- Mark `confidence: low` when synthesis is speculative
-- Cite source paths in answers — never present synthesis without provenance
+- If a source summary doesn't have enough material for a section, write `_TBD_` — fabrication is worse than absence.
+- Mark `confidence: low` when synthesis is speculative. The frontmatter is how downstream queries decide how much to trust a page.

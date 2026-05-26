@@ -91,12 +91,16 @@ confidence: high | medium | low
 
 [graphify](https://github.com/safishamsi/graphify) is the recommended raw-input generator for codebases.
 
-**The vault is consumer-only.** graphify runs in each *project*, not in the vault. `/wiki ingest-project` orchestrates the pipeline:
+**The vault is consumer-only.** graphify runs in each *project*, not in the vault. `/wiki ingest-project` orchestrates the pipeline **without requiring an LLM API key** by splitting graphify's responsibilities:
 
-1. `graphify . --update --wiki --no-viz` in the project
-2. `rsync --delete <project>/graphify-out/wiki/ ~/vaults/raw/repos/<name>/`
-3. Claude reads `raw/repos/<name>/` and writes `wiki/sources/summary-<name>.md`
-4. Concepts/entities pages created/updated; `index.md` and `log.md` updated
+1. `graphify update <project>` in the project — refreshes `graph.json` and clusters; no LLM call.
+2. Claude curates community labels to 100% coverage (English by default; falls back to top-node label for singleton communities). This replaces the LLM step that `graphify . --wiki` would otherwise perform.
+3. `scripts/rebuild_wiki.py` calls `graphify.wiki.to_wiki()` directly with the curated labels — writes `<project>/graphify-out/wiki/` deterministically.
+4. `rsync --delete <project>/graphify-out/wiki/ ~/vaults/raw/repos/<name>/`
+5. Claude reads `raw/repos/<name>/` and writes `wiki/sources/summary-<name>.md`
+6. Concepts/entities pages created/updated; `index.md` and `log.md` updated
+
+If someone runs the full `graphify .` pipeline externally and overwrites the curated labels, `scripts/recover_labels.py` reconstructs them by voting on community ids via the previous filenames in `raw/repos/<name>/`. See SKILL.md for the full flow.
 
 ## Absolute rules
 

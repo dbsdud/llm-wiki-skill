@@ -3,3 +3,10 @@
 *.swo
 *.bak
 *~
+
+# graphify output created when this skill's own directory is treated as a project
+graphify-out/
+
+# Python bytecode cache from scripts/
+__pycache__/
+*.pyc
