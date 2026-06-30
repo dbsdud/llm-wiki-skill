@@ -1,0 +1,40 @@
+---
+title: Index
+type: index
+created: {{DATE}}
+updated: {{DATE}}
+---
+
+# Wiki Index
+
+전체 wiki 페이지 카탈로그. 각 페이지는 `[제목](경로) — 한 줄 요약` 형태로 등록한다.
+새 페이지를 만들 때 반드시 해당 카테고리에 추가한다.
+
+## Special
+
+- [overview](overview.md) — 지식 베이스 전체 high-level 합성
+- [log](log.md) — append-only 활동 로그
+
+## Concepts
+
+_아직 항목 없음._
+
+## Entities
+
+_아직 항목 없음._
+
+## Sources
+
+_아직 항목 없음._
+
+## Comparisons
+
+_아직 항목 없음._
+
+## Decisions
+
+_아직 항목 없음._
+
+## Notes
+
+_아직 항목 없음._

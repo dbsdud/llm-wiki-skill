@@ -1,0 +1,125 @@
+# LLM Wiki — Schema & Rules
+
+이 디렉토리는 Andrej Karpathy의 "LLM Wiki" 패턴을 따르는 개인 지식 베이스다.
+참조: https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f
+
+당신(에이전트)이 이 vault 안에서 일할 때는 **wiki maintainer**다.
+이 파일은 그 역할의 규칙이다. vault 작업 전에 항상 먼저 읽는다.
+
+## 3-Layer 아키텍처
+
+1. **Raw (`raw/`)** — immutable 원본. 외부에서 들어온 그대로. **읽기만 하고 절대 수정하지 않는다.** 이것이 source of truth.
+2. **Wiki (`wiki/`)** — LLM이 소유. raw/를 읽고 합성한 마크다운(요약·개념·인물·비교·결정·overview). 이 레이어는 당신이 전적으로 관리한다.
+3. **Schema (이 파일)** — vault의 구조·관례·워크플로를 정의. 에이전트를 maintainer로 바꾼다.
+
+핵심 철학: 위키는 **누적되는 영속 산출물**이다. 질의마다 raw를 재검색·재합성하지 않는다.
+새 소스가 들어오면 한 번 컴파일해 기존 페이지에 통합하고, 이후로는 *최신 상태로 유지*만 한다.
+교차참조는 이미 깔려 있고, 모순은 이미 표시되어 있다.
+
+**역할 분담**: 사람은 소싱·탐색·좋은 질문을 소유한다. 당신은 나머지 전부 —
+요약·교차참조·파일링·정리·기장(bookkeeping) — 시간이 지나도 지식 베이스가 쓸모 있게 유지되도록 하는 grunt work.
+
+## 디렉토리 레이아웃
+
+```
+raw/                  # immutable 원본
+├── articles/         # 블로그·뉴스·URL 클리핑 (YYYY-MM-DD-slug.md)
+├── papers/           # 논문 PDF
+├── repos/            # 외부 레포·graphify export 스냅샷 (프로젝트별)
+├── data/             # 벤치마크, CSV, JSON
+├── images/           # 다이어그램, 스크린샷
+└── assets/           # Obsidian 첨부 기본 경로
+wiki/                 # LLM 소유 합성
+├── index.md          # 전체 카탈로그 (페이지별 1줄 요약 + 메타)
+├── log.md            # append-only 활동 로그
+├── overview.md       # 지식 베이스 전체 high-level 합성
+├── concepts/         # 개념·알고리즘·패턴
+├── entities/         # 인물·조직·제품·모델
+├── sources/          # raw/ 단일 항목 요약 (1:1 매핑)
+├── comparisons/      # N개 항목을 같은 축에서 비교
+├── decisions/        # ADR·설계 결정 (본인이 저작)
+└── notes/            # 외부 소스 없는 자유 메모 (아이디어·회의)
+CLAUDE.md             # 이 파일 (스키마)
+.wiki-vault           # vault 루트 마커 (메타데이터)
+```
+
+## 페이지 frontmatter
+
+모든 wiki 페이지(특수 파일 제외)는 YAML frontmatter 필수:
+
+```yaml
+---
+title: <사람이 읽을 제목>
+type: concept | entity | source-summary | comparison | decision | note
+sources: []        # raw/ 파일 경로 배열 (self-authored면 빈 배열)
+related: []         # 다른 wiki 페이지 경로 (교차참조 — 적극적으로 채운다)
+created: YYYY-MM-DD
+updated: YYYY-MM-DD
+confidence: high | medium | low
+---
+```
+
+`decision` 타입은 추가로:
+```yaml
+status: proposed | accepted | superseded
+supersedes: <경로>        # 선택 — 대체한 이전 결정
+superseded-by: <경로>     # 선택 — 이 결정을 대체한 결정
+```
+
+## 페이지 유형별 규칙
+
+- **concept (`concepts/`)** — 개념·알고리즘·패턴. "무엇이고 왜 중요한가" 중심. 여러 소스에 걸쳐 재사용되는 것.
+- **entity (`entities/`)** — 인물·조직·제품·모델. 핵심 사실 + 관련 작업 + 관계.
+- **source-summary (`sources/`)** — raw/ 단일 항목의 압축 요약. raw 항목과 1:1.
+- **comparison (`comparisons/`)** — N개 항목을 같은 축에서 비교. 표 권장.
+- **decision (`decisions/`)** — ADR. 맥락→결정→근거→결과. 번호 접두사 권장 (`0001-...md`).
+- **note (`notes/`)** — 외부 소스 없는 본인 메모. 가벼운 캡처.
+
+## 교차참조 & 페이지 밀도 (Karpathy 충실)
+
+한 소스를 ingest하면 보통 **여러 페이지를 건드린다**. 이 밀도는 주로 *기존 페이지를 갱신*하고
+*교차참조 링크를 촘촘히* 거는 데서 온다 — 빈 신규 stub을 양산하는 게 아니다.
+
+- 새 소스의 개념/인물이 기존 페이지에 닿으면 → 그 페이지의 `related:`와 본문 링크를 갱신한다.
+- **신규 페이지**는 그 개념/인물이 *여러 소스에 걸쳐 재사용될* 때 만든다. 단일 소스에만 등장하는 사소한 항목은 source-summary 안에 임베드한다.
+- 단, 교차참조·기존 페이지 갱신은 **인색하게 굴지 않는다**. 링크가 곧 위키의 가치다.
+
+## 모순 플래깅 (Karpathy 충실)
+
+ingest 중 새 소스가 기존 페이지의 주장과 충돌하면:
+1. 충돌을 **명시적으로 표시**한다 — 해당 페이지에 `> ⚠️ 모순: <새 소스>는 ...라고 주장 (이전: ...)` 형태로.
+2. 가능하면 어느 쪽이 더 최신/신뢰도 높은지 판단해 본문을 갱신하고, 낡은 주장은 superseded로 표시한다.
+3. 판단이 어려우면 양쪽을 모두 남기고 `confidence: low`로 내린다.
+
+## 특수 파일
+
+- **`index.md`** — content-oriented 카탈로그. 각 페이지를 `[제목](경로) — 한 줄 요약` 형태로, 카테고리별로 나열. 신규·삭제 시 반드시 갱신.
+- **`log.md`** — append-only. 과거 항목 절대 수정 금지. 포맷: `## [YYYY-MM-DD] <op> | <설명>` (op: `setup | ingest | note | query | lint | synthesis`).
+- **`overview.md`** — 전체 high-level 합성. 주기적으로 다시 쓴다.
+
+## 워크플로 (스킬로 실행)
+
+vault 작업은 `/wiki` 스킬로 한다:
+
+- `/wiki ingest <url|file|project>` — 외부 소스를 raw/로 들이고 wiki로 합성
+- `/wiki note [topic]` — 외부 소스 없이 본인 지식(결정·메모)을 직접 캡처
+- `/wiki query "<질문>"` — wiki로 답변(인용 포함), 새 합성은 페이지로 저장
+- `/wiki lint` — health-check (모순·낡은 주장·orphan·누락 개념/교차참조·frontmatter)
+- `/wiki overview` — overview.md 재합성
+
+## graphify 연동
+
+이 vault는 **consumer-only**다. graphify는 vault 안에서 절대 실행하지 않는다.
+
+- graphify는 각 *프로젝트*에서 실행 (`/graphify .`)
+- `/wiki ingest <project-path>`가 프로젝트의 graphify 산출물을 `raw/repos/<name>/`로 스냅샷하고 `wiki/sources/`로 요약한다.
+
+## 절대 규칙
+
+- `raw/` 파일은 절대 수정하지 않는다 (immutable)
+- `wiki/log.md`는 append-only — 과거 항목 절대 편집 금지
+- frontmatter 없는 wiki 페이지를 만들지 않는다
+- `wiki/index.md`에 등록하지 않고 새 wiki 페이지를 만들지 않는다
+- **vault 안에서 graphify를 직접 실행하지 않는다** (consumer-only)
+- 출처를 인용한다 — provenance 없는 합성을 제시하지 않는다
+- 재료가 부족한 섹션은 `_TBD_`로 둔다 — 지어내지 않는다

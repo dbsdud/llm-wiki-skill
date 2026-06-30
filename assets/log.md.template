@@ -1,0 +1,13 @@
+---
+title: Activity Log
+type: log
+created: {{DATE}}
+updated: {{DATE}}
+---
+
+# Log
+
+Append-only. 과거 항목 절대 수정 금지.
+포맷: `## [YYYY-MM-DD] <op> | <설명>` (op: `setup | ingest | note | query | lint | synthesis`)
+
+## [{{DATE}}] setup | vault initialized at {{TARGET}}
