@@ -1,0 +1,27 @@
+name: release-please
+
+# 각 프로젝트의 호출용 워크플로.
+# 실제 로직은 중앙 repo(dbsdud/.github)의 재사용 워크플로에 있다.
+# .github/workflows/release.yml 위치에 둔다.
+
+on:
+  push:
+    branches: [main]
+
+# 동시 실행 방지(연속 push 시 release PR 충돌 방지)
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    uses: dbsdud/.github/.github/workflows/release-please.yml@main
+    secrets: inherit
+    # 필요 시 입력 재정의 가능(보통 불필요):
+    # with:
+    #   config-file: release-please-config.json
+    #   target-branch: main
